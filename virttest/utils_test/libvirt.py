@@ -2426,3 +2426,28 @@ def update_vm_disk_source(vm_name, disk_source_path, source_type="file"):
     logging.debug("The new VM XML:\n%s", vmxml.xmltreefile)
     vmxml.sync()
     return True
+
+
+def exec_edit(source, edit_cmd, connect_uri="qemu:///system"):
+    """
+    Execute edit command.
+
+    :param source : virsh edit's option.
+    :param edit_cmd: Edit command list to execute.
+    :return: True if edit successed, False if edit failed.
+    """
+    logging.info("Trying to edit xml with cmd %s", edit_cmd)
+    session = aexpect.ShellSession("sudo -s")
+    try:
+        session.sendline("virsh -c %s edit %s" % (connect_uri, source))
+        for cmd in edit_cmd:
+            session.sendline(cmd)
+        session.send('\x1b')
+        session.send('ZZ')
+        remote.handle_prompts(session, None, None, r"[\#\$]\s*$", debug=True)
+        session.close()
+        return True
+    except Exception, e:
+        session.close()
+        logging.error("Error occured: %s", e)
+        return False
