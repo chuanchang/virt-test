@@ -3023,3 +3023,29 @@ def check_listening_port_remote_by_service(server_ip, server_user, server_pwd,
     except:
         if session:
             session.close()
+
+
+def block_specific_ip_by_time(ip_addr, block_time="1 seconds", runner=None):
+    """
+    Using iptables tool to block specific IP address with certain time
+    :param  ip_add : specific host IP address
+    :param  block_time: blocking time, the format looks like 'N ${time}', and
+                         N >=1, the ${time} is [hours|minutes|seconds],etc, the
+                         default is '1 seconds'
+    :param  runner: command runner, it's a remote session
+    """
+    cmd = "iptables -A INPUT -s %s -m time --kerneltz --timestart \
+           $(date +%%H:%%M:%%S) --timestop $(date --date='+%s' +%%H:%%M:%%S) \
+           -j DROP" % (ip_addr, block_time)
+    list_rules = "iptables -L"
+    try:
+        if runner is None:
+            runner = local_runner
+            try:
+                os_dep.command("iptables")
+            except ValueError, details:
+                raise error.TestNAError(details)
+        runner(cmd)
+        logging.debug("List current iptables rules:\n%s", runner(list_rules))
+    except error.CmdError:
+        logging.error("Failed to run command '%s'", cmd)
