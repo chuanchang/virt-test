@@ -1501,7 +1501,9 @@ class HostStress(object):
         self.params = {}
         if params:
             self.params = params
-        self.timeout = 60
+            self.timeout = int(params.get("load_timeout", 240))
+        else:
+            self.timeout = 60
         self.stress_type = stress_type
         self.host_stress_process = None
         if stress_type not in ["stress", "unixbench"]:
@@ -1526,7 +1528,8 @@ class HostStress(object):
         self.host_stress_process = subprocess.Popen(args,
                                                     stdout=subprocess.PIPE,
                                                     stderr=subprocess.PIPE)
-        running = utils_misc.wait_for(self.app_running, first=0.5, timeout=60)
+        running = utils_misc.wait_for(self.app_running, first=0.5,
+                                      timeout=self.timeout)
         if not running:
             raise StressError("Stress tool %s isn't running"
                               % self.stress_type)
