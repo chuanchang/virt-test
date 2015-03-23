@@ -1140,7 +1140,7 @@ class VM(virt_vm.BaseVM):
         finally:
             session.close()
 
-    def create_swap_partition(self):
+    def create_swap_partition(self, swap_path=None):
         """
         Make a swap partition and active it.
 
@@ -1151,7 +1151,8 @@ class VM(virt_vm.BaseVM):
             logging.error("Can't create swap on a dead VM.")
             return False
 
-        swap_path = os.path.join(data_dir.get_tmp_dir(), "swap_image")
+        if not swap_path:
+            swap_path = os.path.join(data_dir.get_tmp_dir(), "swap_image")
         swap_size = self.get_used_mem()
         utils.run("qemu-img create %s %s" % (swap_path, swap_size * 1024))
         self.created_swap_path = swap_path
