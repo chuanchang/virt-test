@@ -30,7 +30,7 @@ import time
 import subprocess
 
 from autotest.client import utils, os_dep
-from autotest.client.shared import error
+from autotest.client.shared import error, ssh_key
 from autotest.client.tools import scan_results
 from virttest import aexpect, utils_misc, virt_vm, data_dir, utils_net
 from virttest import storage, asset, bootstrap, remote
@@ -1815,3 +1815,85 @@ def canonicalize_disk_address(disk_address):
     add_detail_str = "%s:%s" % (add_bus_type, add_detail_str[:-1])
 
     return add_detail_str
+
+
+class RemoteVMManager(object):
+
+    """Control images on remote host"""
+
+    def __init__(self, params):
+        self.remote_host = params.get("server_ip")
+        self.remote_user = params.get("server_user")
+        self.remote_pwd = params.get("server_pwd")
+        self.runner = remote.RemoteRunner(host=self.remote_host,
+                                          username=self.remote_user,
+                                          password=self.remote_pwd)
+
+    def setup_ssh_auth(self, vm_ip, vm_pwd, vm_user="root",
+                       port=22, timeout=10):
+        """
+        Setup SSH passwordless access between remote host
+        and VM, which is on the remote host.
+        """
+        self.runner.run("ssh-keygen -y -t rsa -q -N '' -f ~/.ssh/id_rsa")
+        session = self.runner.session
+        session.sendline("ssh-copy-id -i ~/.ssh/id_rsa.pub root@%s"
+                         % vm_ip)
+        while True:
+            matched_strs = [r"[Aa]re you sure", r"[Pp]assword:\s*$",
+                            r"lost connection", r"]#"]
+            try:
+                index, text = session.read_until_last_line_matches(
+                    matched_strs, timeout=20,
+                    internal_timeout=0.5)
+            except (aexpect.ExpectTimeoutError,
+                    aexpect.ExpectProcessTerminatedError), e:
+                raise error.TestFail("Setup autologin to vm failed:%s" % e)
+            logging.debug("%s:%s", index, text)
+            if index == 0:
+                logging.debug("Sending 'yes' for fingerprint...")
+                session.sendline("yes")
+                continue
+            elif index == 1:
+                logging.debug("Sending '%s' for vm logging...", vm_pwd)
+                session.sendline(vm_pwd)
+                continue
+            elif index == 2:
+                raise error.TestFail("Disconnected to vm on remote host.")
+            elif index == 3:
+                logging.debug("Logged in now...")
+                break
+
+    def check_network(self, vm_ip, count=5, timeout=60):
+        """
+        Check VM network connectivity
+        """
+        logging.debug("Check VM network connectivity...")
+        vm_net_connectivity = False
+        sleep_time = 5
+        result = ""
+        cmd = "ping -c %s %s" % (count, vm_ip)
+        while timeout > 0:
+            result = self.runner.run(cmd, ignore_status=True)
+            if result.exit_status:
+                time.sleep(sleep_time)
+                timeout -= sleep_time
+                continue
+            else:
+                vm_net_connectivity = True
+                logging.info(result.stdout)
+                break
+
+        if not vm_net_connectivity:
+            raise error.TestFail("Failed to ping %s: %s" % (vm_ip,
+                                                            result.stdout))
+
+    def run_command(self, vm_ip, command, vm_user="root", runner=None):
+        """
+        Run command in the VM.
+        """
+        cmd = "ssh %s@%s '%s'" % (vm_user, vm_ip, command)
+        try:
+            self.runner.run(cmd)
+        except error.CmdError, detail:
+            logging.debug("Failed to run '%s' in the VM: %s", cmd, detail)
