@@ -10,6 +10,7 @@ import time
 import logging
 
 import ovirt
+import aexpect
 from autotest.client import os_dep, utils
 from autotest.client.shared import ssh_key
 
@@ -252,12 +253,12 @@ class LinuxVMCheck(VMCheck):
         Get vm os info.
         """
         cmd = "cat /etc/os-release"
-        output = self.session.cmd(cmd)
-        if re.search('No such file', output):
+        try:
+            output = self.session.cmd(cmd)
+            output = output.split('\n')[5].split('=')[1]
+        except aexpect.ShellError, e:
             cmd = "cat /etc/issue"
             output = self.session.cmd(cmd).split('\n', 1)[0]
-        else:
-            output = output.split('\n')[5].split('=')[1]
         logging.debug("The os info is: %s" % output)
         return output
 

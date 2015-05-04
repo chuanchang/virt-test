@@ -521,6 +521,21 @@ def process(test, params, env, image_func, vm_func, vm_first=False):
     if vm_first:
         _call_image_func()
 
+def _update_address_cache(address_cache, line):
+    if re.search("Your.IP", line, re.IGNORECASE):
+        matches = re.findall(r"\d*\.\d*\.\d*\.\d*", line)
+        if matches:
+            address_cache["last_seen"] = matches[0]
+    if re.search("Client.Ethernet.Address", line, re.IGNORECASE):
+        matches = re.findall(r"\w*:\w*:\w*:\w*:\w*:\w*", line)
+        if matches and address_cache.get("last_seen"):
+            mac_address = matches[0].lower()
+            if time.time() - address_cache.get("time_%s" % mac_address, 0) > 5:
+                logging.debug("(address cache) DHCP lease OK: %s --> %s",
+                              mac_address, address_cache.get("last_seen"))
+            address_cache[mac_address] = address_cache.get("last_seen")
+            address_cache["time_%s" % mac_address] = time.time()
+            del address_cache["last_seen"]
 
 @error.context_aware
 def preprocess(test, params, env):
@@ -545,6 +560,40 @@ def preprocess(test, params, env):
     username = params.get('ovirt_node_user')
     password = params.get('ovirt_node_password')
     vm_type = params.get('vm_type')
+
+    # Start tcpdump if it isn't already running
+    if "address_cache" not in env:
+        env["address_cache"] = {}
+    if "tcpdump" in env and not env["tcpdump"].is_alive():
+        env["tcpdump"].close()
+        del env["tcpdump"]
+    if "tcpdump" not in env and params.get("run_tcpdump", "yes") == "yes":
+        cmd = "/usr/sbin/tcpdump -npvi any 'dst port 68'"
+        if params.get("remote_preprocess") == "yes":
+            logging.debug("Starting tcpdump '%s' on remote host", cmd)
+            login_cmd = ("ssh -o UserKnownHostsFile=/dev/null -o \
+                         PreferredAuthentications=password -p %s %s@%s" %
+                         (port, username, address))
+            logging.debug("The login commands: [%s]", login_cmd)
+            env["tcpdump"] = aexpect.ShellSession(
+                login_cmd,
+                output_func=_update_address_cache,
+                output_params=(env["address_cache"],))
+            remote.handle_prompts(env["tcpdump"], username, password, prompt)
+            env["tcpdump"].sendline(cmd)
+        else:
+            logging.debug("Starting tcpdump '%s' on local host", cmd)
+            env["tcpdump"] = aexpect.Tail(
+                command=cmd,
+                output_func=_update_address_cache,
+                output_params=(env["address_cache"],))
+
+        if utils_misc.wait_for(lambda: not env["tcpdump"].is_alive(),
+                              0.1, 0.1, 1.0):
+            logging.warn("Could not start tcpdump")
+            logging.warn("Status: %s" % env["tcpdump"].get_status())
+            logging.warn("Output:" + utils_misc.format_str_for_message(
+                env["tcpdump"].get_output()))
 
     setup_pb = False
     ovs_pb = False
@@ -592,7 +641,7 @@ def preprocess(test, params, env):
     # Start tcpdump if it isn't already running
     # The fact it has to be started here is so that the test params
     # have to be honored.
-    env.start_tcpdump(params)
+    #env.start_tcpdump(params)
 
     # Add migrate_vms to vms
     migrate_vms = params.objects("migrate_vms")
@@ -944,7 +993,9 @@ def postprocess(test, params, env):
             vm.destroy()
 
     # Terminate the tcpdump thread
-    env.stop_tcpdump()
+    #env.stop_tcpdump()
+    if env["tcpdump"].is_alive():
+        env["tcpdump"].close()
 
     # Kill all aexpect tail threads
     aexpect.kill_tail_threads()
